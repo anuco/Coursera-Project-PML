@@ -1,0 +1,143 @@
+---
+title: "Practical Machine Learning"
+author: "Anubhav Srivastava"
+date: "28 December 2015"
+output: html_document
+---
+
+#Submission of Course Project for Practical Machine Learning - Coursera
+
+##Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+##Data 
+
+The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+The test data are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment. 
+
+##Data Preparation
+
+###Loading dataset
+
+```{r}
+training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", na.strings = c("NA", "#DIV/0!", ""))
+testing  <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",  na.strings = c("NA", "#DIV/0!", ""))
+```
+
+###Reading the dataset
+
+```{r}
+str(training, list.len=15)
+```
+
+```{r}
+table(training$classe)
+```
+
+```{r}
+prop.table(table(training$user_name, training$classe), 1)
+```
+
+```{r}
+prop.table(table(training$classe))
+```
+
+###Cleaning the dataset
+
+Removing columns meant only for reference and mostly NA values
+```{r}
+training <- training[, 7:160]
+testing  <- testing[, 7:160]
+is_data  <- apply(!is.na(training), 2, sum) > 19621  # which is the number of observations
+training <- training[, is_data]
+testing  <- testing[, is_data]
+```
+
+###Creating training and cross validation datasets
+
+60% data has been used for training purpose
+```{r}
+library(caret)
+set.seed(3141592)
+inTrain <- createDataPartition(y=training$classe, p=0.60, list=FALSE)
+train1  <- training[inTrain,]
+train2  <- training[-inTrain,]
+dim(train1)
+dim(train2)
+```
+
+##Data Analysis
+
+We'll use the Random Forest algorithm to figure out the top 10 covariates from the vast pool of 53 (interoperatibility)
+```{r}
+library(randomForest)
+set.seed(3141592)
+fitModel <- randomForest(classe~., data=train1, importance=TRUE, ntree=100)
+varImpPlot(fitModel)
+```
+
+Top 10 covariates are yaw_belt, roll_belt, num_window, pitch_belt, magnet_dumbbell_y, magnet_dumbbell_z, pitch_forearm, accel_dumbbell_y, roll_arm, and roll_forearm. Now, lets do a correalation analysis on these using a correlation matrix (search for correalation above 75%).
+
+```{r}
+correl = cor(train1[,c("yaw_belt","roll_belt","num_window","pitch_belt","magnet_dumbbell_z","magnet_dumbbell_y","pitch_forearm","accel_dumbbell_y","roll_arm","roll_forearm")])
+diag(correl) <- 0
+which(abs(correl)>0.75, arr.ind=TRUE)
+```
+
+Now, we'll use a tree classifier to decide which between the two covariates should be dropped.
+
+```{r}
+library(rpart.plot)
+fitModel <- rpart(classe~., data=train1, method="class")
+prp(fitModel)
+```
+
+Since roll_belt is at the top of the heap, we drop yaw_belt from the list of 10 variables and rerun the correlation matrix - max correalation is less than 51%. This seems acceptable.
+
+##Machine Learning Model
+
+Using Random Forest algorithm, we are using a 2-fold cross-validation control. This is the simplest k-fold cross-validation possible and it will give a reduced computation time. Because the data set is large, using a small number of folds is justified.
+
+```{r}
+library(e1071)
+set.seed(3141592)
+fitModel <- train(classe~roll_belt+num_window+pitch_belt+magnet_dumbbell_y+magnet_dumbbell_z+pitch_forearm+accel_dumbbell_y+roll_arm+roll_forearm,
+                  data=train1,
+                  method="rf",
+                  trControl=trainControl(method="cv",number=2),
+                  prox=TRUE,
+                  verbose=TRUE,
+                  allowParallel=TRUE)
+```
+
+To test the accuracy of the model, we'll use the confusion matrix model on the cross validation dataset.
+
+```{r}
+predictions <- predict(fitModel, newdata=train2)
+confusionMat <- confusionMatrix(predictions, train2$classe)
+confusionMat
+```
+
+The analysis gives a 99.77% prediction accuracy and a 0.23% out-of-sample error rate. This is an acceptable analysis.
+
+#Course Submission
+
+For submission, we predict the classification of the 20 observations in the testing data, storing the results in a CSV file in two columns (named problem_id and classe) and generate 20 text files for upload.
+
+```{r}
+predictions <- predict(fitModel, newdata=testing)
+testing$classe <- predictions
+submit <- data.frame(problem_id = testing$problem_id, classe = predictions)
+write.csv(submit, file = "coursera-submission.csv", row.names = FALSE)
+answers = testing$classe
+write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_",i,".txt")
+    write.table(x[i], file=filename, quote=FALSE, row.names=FALSE, col.names=FALSE)
+  }
+}
+write_files(answers)
+```
